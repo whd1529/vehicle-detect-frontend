@@ -1,85 +1,212 @@
 <template>
-  <div>
-    <h2>🚗 车辆识别</h2>
+  <div class="home">
+    <el-card shadow="never" class="upload-card">
+      <template #header>
+        <span class="title">🚗 车辆智能识别系统</span>
+      </template>
 
-    <el-upload
-      class="upload-demo"
-      drag
-      :auto-upload="false"
-      :limit="1"
-      accept="image/*"
-      @change="handleUpload"
-    >
-      <el-icon style="font-size:40px"><UploadFilled /></el-icon>
-      <div>点击或拖拽图片上传</div>
-    </el-upload>
+      <el-upload
+        class="uploader"
+        drag
+        accept="image/*"
+        :show-file-list="false"
+        :before-upload="beforeUpload"
+        :http-request="uploadImage"
+      >
+        <el-icon class="upload-icon"><Upload /></el-icon>
+        <div class="upload-text">点击或拖拽上传车辆图片</div>
+      </el-upload>
 
-    <el-button type="primary" @click="doDetect" :loading="loading" style="margin-top:15px">
-      开始识别
-    </el-button>
+      <div v-if="loading" class="loading">
+        <el-spinner size="large" />
+        <p>AI 正在识别中...</p>
+      </div>
 
-    <el-divider />
+      <div v-if="result" class="result">
+        <!-- 图片 + 画框 -->
+        <div class="image-box">
+          <img ref="imgRef" :src="previewUrl" class="result-img" />
+          <canvas ref="canvasRef" class="canvas"></canvas>
+        </div>
 
-    <div v-if="resultUrl" style="display:flex;gap:30px">
-      <img :src="resultUrl" style="max-width:60%" />
-      <div>
-        <p><b>车辆总数：</b>{{ total }}</p>
-        <el-table :data="tableData" border size="small">
+        <!-- 统计 -->
+        <el-alert
+          title="识别统计"
+          :closable="false"
+          type="success"
+          show-icon
+        >
+          共识别到 {{ result.count }} 辆车
+        </el-alert>
+
+        <!-- 车辆明细表 -->
+        <el-table :data="result.vehicles" class="table" stripe border>
+          <el-table-column prop="id" label="编号" width="60" />
           <el-table-column prop="type" label="车型" />
-          <el-table-column prop="num" label="数量" />
+          <el-table-column prop="brand" label="品牌" />
+          <el-table-column prop="color" label="颜色" />
+          <el-table-column prop="plate" label="车牌号" />
+          <el-table-column prop="seatbelt" label="安全带">
+            <template #default="{ row }">
+              <el-tag :type="row.seatbelt ? 'success' : 'danger'">
+                {{ row.seatbelt ? '已系' : '未系' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="smoking" label="抽烟">
+            <template #default="{ row }">
+              <el-tag :type="row.smoking ? 'warning' : 'info'">
+                {{ row.smoking ? '是' : '否' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="hands_on_wheel" label="握方向盘">
+            <template #default="{ row }">
+              <el-tag :type="row.hands_on_wheel ? 'success' : 'danger'">
+                {{ row.hands_on_wheel ? '是' : '否' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="confidence" label="置信度">
+            <template #default="{ row }">
+              {{ (row.confidence * 100).toFixed(1) }}%
+            </template>
+          </el-table-column>
         </el-table>
       </div>
-    </div>
+    </el-card>
   </div>
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, nextTick } from 'vue'
 import axios from 'axios'
-import { UploadFilled } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import { Upload } from '@element-plus/icons-vue'
 
-let fileObj = null
 const loading = ref(false)
-const resultUrl = ref('')
-const total = ref(0)
-const tableData = ref([])
+const previewUrl = ref('')
+const result = ref(null)
+const imgRef = ref(null)
+const canvasRef = ref(null)
 
-const handleUpload = (e) => { fileObj = e.raw }
+// ✅ 后端地址（Railway / Local）
+const BASE =
+  import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
-const doDetect = async () => {
-  if (!fileObj) return alert('请先选择图片')
-  const fd = new FormData()
-  fd.append('file', fileObj)
+const beforeUpload = (file) => {
+  if (!file.type.startsWith('image/')) {
+    ElMessage.error('请上传图片文件')
+    return false
+  }
+  previewUrl.value = URL.createObjectURL(file)
+  result.value = null
+  return true
+}
 
+const uploadImage = async ({ file }) => {
   loading.value = true
+  const form = new FormData()
+  form.append('image', file)
+
   try {
-    const { data } = await axios.post('http://localhost:8000/api/detect/image', fd)
-
-    resultUrl.value = 'http://localhost:8000' + data.result_url
-    total.value = data.total_vehicles
-    tableData.value = [
-      { type: '轿车', num: data.counts.car },
-      { type: '公交车', num: data.counts.bus },
-      { type: '卡车', num: data.counts.truck }
-    ]
-
-    saveHistory(data)
-  } catch {
-    alert('识别失败')
+    const { data } = await axios.post(
+      `${BASE}/api/detect/image`,
+      form
+    )
+    result.value = data
+    await nextTick()
+    drawBoxes(data.vehicles)
+  } catch (e) {
+    console.error(e)
+    ElMessage.error('识别失败，请检查后端服务')
   } finally {
     loading.value = false
   }
 }
 
-const saveHistory = (data) => {
-  const record = {
-    time: new Date().toLocaleString(),
-    resultUrl: 'http://localhost:8000' + data.result_url,
-    counts: data.counts,
-    total: data.total_vehicles
-  }
-  const history = JSON.parse(localStorage.getItem('history') || '[]')
-  history.unshift(record)
-  localStorage.setItem('history', JSON.stringify(history.slice(0, 50)))
+// ✅ Canvas 画检测框
+const drawBoxes = (vehicles) => {
+  const img = imgRef.value
+  const canvas = canvasRef.value
+  const ctx = canvas.getContext('2d')
+
+  canvas.width = img.clientWidth
+  canvas.height = img.clientHeight
+
+  const scaleX = img.clientWidth / img.naturalWidth
+  const scaleY = img.clientHeight / img.naturalHeight
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+  vehicles.forEach((v) => {
+    const [x, y, w, h] = v.bbox
+    const sx = x * scaleX
+    const sy = y * scaleY
+    const sw = (w - x) * scaleX
+    const sh = (h - y) * scaleY
+
+    // 边框
+    ctx.strokeStyle = v.seatbelt ? '#67C23A' : '#F56C6C'
+    ctx.lineWidth = 3
+    ctx.strokeRect(sx, sy, sw, sh)
+
+    // 标签
+    ctx.fillStyle = v.seatbelt ? '#67C23A' : '#F56C6C'
+    ctx.font = '14px Arial'
+    ctx.fillText(
+      `#${v.id} ${v.plate} ${v.type}`,
+      sx,
+      sy > 20 ? sy - 5 : sy + sh + 15
+    )
+  })
 }
 </script>
+
+<style scoped>
+.home {
+  padding: 24px;
+}
+.title {
+  font-size: 20px;
+  font-weight: bold;
+}
+.upload-card {
+  max-width: 900px;
+  margin: 0 auto;
+}
+.uploader {
+  text-align: center;
+}
+.upload-icon {
+  font-size: 48px;
+  color: #409eff;
+}
+.upload-text {
+  margin-top: 8px;
+}
+.loading {
+  text-align: center;
+  margin: 24px 0;
+}
+.result {
+  margin-top: 24px;
+}
+.image-box {
+  position: relative;
+  margin-bottom: 16px;
+}
+.result-img {
+  width: 100%;
+  display: block;
+}
+.canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+}
+.table {
+  margin-top: 16px;
+}
+</style>
